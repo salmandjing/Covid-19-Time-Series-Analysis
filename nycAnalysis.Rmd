@@ -1,0 +1,272 @@
+---
+title: "NycAnalysis"
+author: "Salman D"
+date: "6/9/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "NYCTimeSeriesAnalysis"
+author: "Salman D"
+date: "6/2/2021"
+output: html_document
+---
+# Import data
+```{R}
+
+library(zoo)
+
+
+library(ggpubr)
+library(moments)
+
+# Import Data Set
+nycData = read.csv("../data/NycData.csv", header=TRUE)
+
+
+#Normalizing Dates
+nycData$date_of_interest = as.Date(nycData$date_of_interest,format = "%m/%d/%Y")
+```
+
+# Detrending
+```{R}
+
+#plot(diff(nycData$CASE_COUNT, lag = 1),type="l")
+
+#diffNewCases = diff(nycData$CASE_COUNT, lag = 1)
+#x2 = rollmean(diffNewCases,7)
+
+#x1 = cpt.mean(x2,penalty = 'Manual', pen.value = 12000, method = "PELT", minseglen = 14 )
+
+#cpts(x1)
+```
+
+
+#Time Series Plot
+```{R}
+
+
+# Plot (looks better)
+ggplot(data = nycData, aes(x = date_of_interest, y = CASE_COUNT)) +
+geom_line() +
+labs(x = "Date", y = "Confirmed Daily Case Count") +
+ggtitle("NYC Confirmed Covid-19 Cases")
+
+plot( nycData$CASE_COUNT ~ nycData$date_of_interest , main="Scatterplot")
+
+```
+
+# Histogram
+```{R}
+hist(nycData$CASE_COUNT)
+
+hist(nycData$CASE_COUNT,
+main="Histogram for Positive Covid Cases per Day in NYC",
+xlab="Positive Cases",
+border="yellow",
+col="pink",)
+
+```
+
+#QQplot for natural data
+```{R qqnorm sqrt}
+qqnorm(nycData$CASE_COUNT)
+qqline(nycData$CASE_COUNT,col='red')
+
+```
+
+#Regression on natural data
+```{R}
+#Model without transformation
+numericDate = as.numeric(nycData$date_of_interest)
+corrCoef = cor(nycData$CASE_COUNT, numericDate)
+print(sprintf("Correlation Coeff. = %s", corrCoef))
+
+naturalModel = lm(nycData$CASE_COUNT ~ numericDate)
+summary(naturalModel)
+```
+
+
+##Best normalize
+```{R}
+
+library(bestNormalize)
+transformed = bestNormalize(nycData$CASE_COUNT+1)
+print(transformed)
+hist(transformed$x.t, main = "Histogram of Transformed Data")
+hist(transformed$x.t,
+main="Histogram for Positive Covid Cases per Day in NYC",
+xlab="Positive Cases",
+border="yellow",
+col="pink",)
+
+# not based on a model. only looks are nycData$CASE_COUNT 
+
+  # best norm source: https://cran.r-project.org/web/packages/bestNormalize/vignettes/bestNormalize.html
+
+```
+
+# Boxcox with mass
+```{R}
+
+
+#Times series tible
+newModel = lm(nycData$CASE_COUNT+1 ~ nycData$date_of_interest)
+my_fit = MASS::boxcox(newModel, plotit = TRUE)
+max_index = which.max(my_fit$y)
+boxcox_lambda = my_fit$x[max_index]
+boxcox_lambda
+```
+
+#Natural ACF and PACF Graph
+```{R}
+
+acf(nycData$CASE_COUNT)
+
+pacf(nycData$CASE_COUNT)
+# why is there an error
+#high correlation coeff all around?
+
+
+```
+
+# New model ACF and PACF
+```{R}
+# high correlation
+acf(resid(newModel))
+
+
+# at 12 the correlation drops.  There is some correlation overall
+pacf(resid(newModel))
+```
+
+
+
+# Auto Regressive Model
+```{R}
+library(fable)
+library(tsibble)
+# We deleted a duplicated instance on row 26
+dup_index = !duplicated(nycData$date_of_interest)
+which(duplicated(nycData$date_of_interest))
+tidy_ts = tsibble(
+  date = nycData$date_of_interest[dup_index], 
+  cases = nycData$CASE_COUNT[dup_index]+1
+)%>%tsibble::fill_gaps()
+tidy_ts %>% model(arima = ARIMA(cases))%>%report
+# auto regressive model with autoregressive of order 5 with seasonal auto regression of 1 
+
+#resource : https://nwfsc-timeseries.github.io/atsa-labs/sec-tslab-autoregressive-ar-models.html
+
+#not fun intro : https://www.stat.pitt.edu/stoffer/tsa4/
+
+```
+
+
+# Changepoint
+```{R}
+library(changepoint)
+
+ts_mean = cpt.mean(sqrt(nycData$CASE_COUNT), penalty = 'Manual', pen.value = 1000, method = "PELT")
+cp = cpts(ts_mean)
+cp
+
+```
+```{R}
+plot(nycData$CASE_COUNT, type="l", main = "Changepoints in NYC Daily Positive Cases", xlab= "Time", ylab="Daily Cases"  )
+abline(v = c(12,16,24,42,63,91,247,275,303,336,413,434), col="red" )
+
+```
+
+```{R}
+plot(nycData$CASE_COUNT, type="l")
+#abline(v = c(12,16,24,42,63,91,247,275,303,336,413,434), col="brown" )
+abline(v = c(23,47,259), col="red")
+
+# green out of scope - pahse 4 instead?
+
+abline(v = c(352), col="purple" )
+
+abline(v = c(403), col="blue" )
+
+vectorCPT = c(1,12,16,24,42,63,91,247,275,303,336,413,434,length(nycData$CASE_COUNT))
+
+meanVector = seq(0)
+  
+for(i in 1:(length(vectorCPT)-1)){
+meanVector[i] = mean(nycData$CASE_COUNT[vectorCPT[i]:vectorCPT[i+1]])
+}
+
+#segments(vectorCPT[1:(length(vectorCPT)-1)],vectorCPT[2:length(vectorCPT)],y0=meanVector, col="blue")
+
+```
+
+
+```{R}
+sqrt_daily_new_cases = sqrt(nycData$CASE_COUNT)
+
+
+compute_cpt_means <- function(pen, data) {
+ans <- cpt.mean(data, test.stat="Normal", method = "PELT", penalty = "Manual", pen.value = pen)
+length(cpts(ans)) + 1
+}
+
+# moving closer to 0 = identifying real changepoints
+
+# Apply a grid search to different penalty values
+pen.vals = seq(0, 40, .2)
+elbowplotData = unlist(lapply(pen.vals, compute_cpt_means, data = sqrt(nycData$CASE_COUNT)))
+
+
+
+# Create side-by-side plots
+par(mfcol = c(2, 2))
+plot.ts(sqrt_daily_new_cases,type='l',col='red',
+xlab = "time",
+ylab = " Y(t)",
+main = "Stationary signal (constant mean)")
+
+
+
+plot(pen.vals, elbowplotData,
+xlab = "PELT penalty parameter",
+ylab = " ",
+main = " ")
+```
+
+# Policy changepoints
+R
+March 22: Stay at home (Non-essential workers stay at home) 23
+April 15: Facemasks are required 47
+November 13: New resrictions(rest./gym/10 or less) 259
+
+G
+July 1st: Full reopen 
+phases 
+Phase instead??
+
+P: Feb 14 Vulnerable NYC ppl 352
+
+B: April 6: New Yorkers 16 and up are eligible  403
+
+
+```{R}
+
+plot(nycData$CASE_COUNT, type="l",main="Changepoints and Policies NYC", xlab="Day", ylab = "Positive Cases")
+
+abline(v = c(23,47,259), col="red")
+
+# green out of scope - pahse 4 instead?  phase 2 (115) june 22  (129)july 6   (143)july 20
+
+abline(v = c(115,129,143), col="green")
+
+abline(v = c(352), col="purple" )
+
+abline(v = c(403), col="purple" )
+
+abline(v = c(12,16,24,42,63,91,247,275,303,336,413,434), col="black" )
+```

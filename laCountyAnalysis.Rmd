@@ -1,0 +1,245 @@
+---
+title: "LaCounyAnalysis"
+author: "Salman D"
+date: "6/9/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "LATimeSeriesAnalysis"
+author: "Salman D"
+date: "6/2/2021"
+output: html_document
+---
+# Import data
+```{R}
+
+library(zoo)
+
+
+library(ggpubr)
+library(moments)
+
+# Import Data Set
+laData = read.csv("../data/LaCountyData.csv", header=TRUE)
+
+print(nrow(laData))
+laData = laData[nrow(laData): 1,]
+
+#Normalizing Dates
+laData$date_use = as.Date(laData$date_use,format = "%m/%d/%Y")
+```
+
+
+#Time Series Plot
+```{R}
+
+
+# Plot (looks better)
+ggplot(data = laData, aes(x = date_use, y = new_case)) +
+geom_line() +
+labs(x = "Date", y = "Confirmed Daily Case Count") +
+ggtitle("LA County Confirmed Covid-19 Cases")
+
+plot( laData$new_case ~ laData$date_use , main="Scatterplot")
+
+```
+
+# Histogram
+```{R}
+hist(laData$new_case)
+```
+
+#QQplot for natural data
+```{R qqnorm sqrt}
+qqnorm(laData$new_case)
+qqline(laData$new_case,col='red')
+
+```
+
+#Regression on natural data
+```{R}
+#Model without transformation
+numericDate = as.numeric(laData$date_use)
+corrCoef = cor(laData$new_case, numericDate)
+print(sprintf("Correlation Coeff. = %s", corrCoef))
+
+naturalModel = lm(laData$new_case ~ numericDate)
+summary(naturalModel)
+```
+
+
+##Best normalize
+```{R}
+
+library(bestNormalize)
+transformed = bestNormalize(laData$new_case+1)
+print(transformed)
+hist(transformed$x.t, main = "Histogram of Transformed Data")
+
+# not based on a model. only looks are laData$new_case 
+
+  # best norm source: https://cran.r-project.org/web/packages/bestNormalize/vignettes/bestNormalize.html
+
+```
+
+# Boxcox with mass
+```{R}
+
+
+#Times series tible
+newModel = lm(laData$new_case+1 ~ laData$date_use)
+my_fit = MASS::boxcox(newModel, plotit = TRUE)
+max_index = which.max(my_fit$y)
+boxcox_lambda = my_fit$x[max_index]
+boxcox_lambda
+```
+
+#Natural ACF and PACF Graph
+```{R}
+
+acf(laData$new_case)
+
+pacf(laData$new_case)
+# why is there an error
+#high correlation coeff all around?
+
+
+```
+
+# New model ACF and PACF
+```{R}
+# high correlation
+acf(resid(newModel))
+
+
+# at 12 the correlation drops.  There is some correlation overall
+pacf(resid(newModel))
+```
+
+
+
+# Auto Regressive Model
+```{R}
+library(fable)
+library(tsibble)
+# We deleted a duplicated instance on row 26
+dup_index = !duplicated(laData$date_use)
+which(duplicated(laData$date_use))
+tidy_ts = tsibble(
+  date = laData$date_use[dup_index], 
+  cases = laData$new_case[dup_index]+1
+)%>%tsibble::fill_gaps()
+tidy_ts %>% model(arima = ARIMA(cases))%>%report
+# auto regressive model with autoregressive of order 5 with seasonal auto regression of 1 
+
+#resource : https://nwfsc-timeseries.github.io/atsa-labs/sec-tslab-autoregressive-ar-models.html
+
+#not fun intro : https://www.stat.pitt.edu/stoffer/tsa4/
+
+```
+
+
+# Changepoint
+```{R}
+library(changepoint)
+
+ts_mean = cpt.mean(sqrt(laData$new_case),penalty = 'Manual', pen.value = 6000, method = "PELT")
+cp = cpts(ts_mean)
+cp
+
+```
+
+```{R}
+plot(laData$new_case, type="l")
+abline(v = cp, col="red" )
+
+vectorCPT = c(1,cp,length(laData$new_case))
+
+meanVector = seq(0)
+  
+for(i in 1:(length(vectorCPT)-1)){
+meanVector[i] = mean(laData$new_case[vectorCPT[i]:vectorCPT[i+1]])
+}
+
+segments(vectorCPT[1:(length(vectorCPT)-1)],vectorCPT[2:length(vectorCPT)],y0=meanVector, col="blue")
+
+```
+
+
+```{R}
+sqrt_daily_new_cases = sqrt(laData$new_case)
+
+
+compute_cpt_means <- function(pen, data) {
+ans <- cpt.mean(data, test.stat="Normal", method = "PELT", penalty = "Manual", pen.value = pen)
+length(cpts(ans)) + 1
+}
+
+# moving closer to 0 = identifying real changepoints
+
+# Apply a grid search to different penalty values
+pen.vals = seq(0, 40, .2)
+elbowplotData = unlist(lapply(pen.vals, compute_cpt_means, data = sqrt(laData$new_case)))
+
+
+
+# Create side-by-side plots
+par(mfcol = c(2, 2))
+plot.ts(sqrt_daily_new_cases,type='l',col='red',
+xlab = "time",
+ylab = " Y(t)",
+main = "Stationary signal (constant mean)")
+
+
+
+plot(pen.vals, elbowplotData,
+xlab = "PELT penalty parameter",
+ylab = " ",
+main = " ")
+```
+
+# Policy Changepoint
+R
+One bar - March 16 - No church/gyms/restaurants,enterta - March 19; Stay at home orders   458
+May 14/15: LA mask mandate (https://deadline.com/2020/05/l-a-county-coronavirus-update-public-health-director-says-masks-are-in-fact-mandatory-across-the-entire-county-1202935226/)  399
+Nov 17 - New stay at home order 214
+G
+Jun 12 2020 - phase 3
+June 15 - full reopen 
+
+P - March 14: vulnerable people 95
+
+Blue - not sure
+
+
+
+```{R}
+plot(laData$new_case,type="l",main="Changepoints and Policies LA County", xlab="Day", ylab = "Positive Cases")
+
+# which(laData$date_use == "2020/03/16")
+# which(laData$date_use == "2020/05/15")
+# which(laData$date_use == "2020/11/17")
+# print('-----')
+# which(laData$date_use == "2020/06/12")
+# which(laData$date_use == "2021/06/15")
+# print('-----')
+# which(laData$date_use == "2020/03/14")
+# print('-----')
+# which(laData$date_use == "2021-04-15")
+
+
+
+abline(v = cp, col="black" )
+abline(v = c(16,76,262), col="red")
+abline(v = c(104,472), col="green")
+abline(v = c(14), col="purple")
+abline(v = c(411), col="purple")
+
+
+# unsure about blue april 15
+```
